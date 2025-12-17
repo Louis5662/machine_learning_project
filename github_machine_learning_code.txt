@@ -1,0 +1,176 @@
+#import all packages required before before carrying out the analysis
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import statsmodels.api as sm
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, roc_auc_score, roc_curve
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.tools.tools import add_constant
+import warnings
+warnings.filterwarnings('ignore')
+
+
+
+# load the dataset
+df = pd.read_csv('machine_learning_indiv_dataset.csv')
+
+# show some basic information about the dataset
+print("Dataset Shape:", df.shape)
+print(df.head())
+print(df.info())
+print(df.describe())
+print(df.isnull().sum())
+
+
+
+# encoding the categorical variables as numeric values so that they can be interpreted 
+label_encoders = {}
+categorical_cols = ['Treatment', 'Mean_temp']
+
+for col in categorical_cols:
+    le = LabelEncoder()
+    df[col + '_encoded'] = le.fit_transform(df[col])
+    label_encoders[col] = le
+    print(f"\n{col} encoding:")
+    for i, class_name in enumerate(le.classes_):
+        print(f"  {class_name}: {i}")
+
+
+
+# labelling all my x-values and my y-value
+X = df[['Treatment_encoded', 'Mean_temp_encoded', 'offspring_per_day']]
+y = df['Survival']
+
+# dividing the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+# checking the shape of X_train and X_test ensures that there is the correct number of rows and columns
+# class distribution displays the proportion of dead and alive individuals in each dataset to ensure they are both very similar
+print(f"\nTraining set size: {X_train.shape}")
+print(f"Testing set size: {X_test.shape}")
+print(f"Class distribution in training set: \n{y_train.value_counts(normalize=True)}")
+print(f"Class distribution in testing set: \n{y_test.value_counts(normalize=True)}")
+
+
+# scaling the data so that features with large numerical ranges (e.g. offspring per day) don't dominate model over those with smaller numerical ranges (e.g. mean_temp)
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# checking for correct number of rows in X_train (80% of 432 = 345.6 (so either 345 or 346)) and X_test (which is 86 or 87)
+print(f"Training set shape: {X_train.shape}")
+print(f"Testing set shape: {X_test.shape}")
+
+# looking at distribution of offspring per day (since it's my only numeric factor) according to whether Daphnia survived the experiment
+plt.figure(figsize=(15, 10))
+features_to_plot = ['offspring_per_day']
+for i, feature in enumerate(features_to_plot):
+    plt.subplot(2, 3, i+1)
+    sns.boxplot(x='Survival', y=feature, data=df)
+    plt.title(f'{feature} by Class')
+    plt.xlabel('Class (0:Dead, 1: Alive)')
+plt.tight_layout()
+plt.show()
+
+
+
+# building and training the logistic regression model
+logreg = LogisticRegression(random_state=42, max_iter=1000)
+logreg.fit(X_train_scaled, y_train)
+
+# making predictions
+y_pred = logreg.predict(X_test_scaled)
+y_pred_proba = logreg.predict_proba(X_test_scaled)[:, 1]
+
+# analysing model performance metrics
+print("\n" + "="*50)
+print("MODEL PERFORMANCE METRICS")
+print("="*50)
+
+print(f"\nAccuracy: {accuracy_score(y_test, y_pred):.4f}")
+print(f"AUC-ROC: {roc_auc_score(y_test, y_pred_proba):.4f}")
+
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred, target_names=['Dead', 'Alive']))
+
+
+
+cv_scores = cross_val_score(LogisticRegression(random_state=42, max_iter=1000), 
+                           X_train_scaled, y_train, cv=5, scoring='accuracy')
+print(f"Cross-validation scores: {cv_scores}")
+print(f"Mean CV accuracy: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
+
+
+
+# visualising the performance of the model
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))  # Changed to 1 row, 2 columns
+fig.suptitle('Logistic Regression Model Analysis', fontsize=16)
+
+# made a confusion matrix to see the distribution of predictions and the prominence of typeI and typeII errors
+cm = confusion_matrix(y_test, y_pred)
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0])  
+axes[0].set_title('Confusion Matrix')
+axes[0].set_xlabel('Predicted')
+axes[0].set_ylabel('Actual')
+
+# made an ROC curve
+fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba)
+axes[1].plot(fpr, tpr, label=f'AUC = {roc_auc_score(y_test, y_pred_proba):.3f}')  
+axes[1].plot([0, 1], [0, 1], 'k--')
+axes[1].set_xlabel('False Positive Rate')
+axes[1].set_ylabel('True Positive Rate')
+axes[1].set_title('ROC Curve')
+axes[1].legend()
+axes[1].grid(True)
+
+plt.tight_layout()
+plt.show()
+
+
+
+# Youden's J calculation to obtain the prediction probability (probability of survival) 
+# that makes the model the most accurate possible (yields highest number of true positive results vs false positives)
+youden_j = tpr - fpr
+optimal_idx = np.argmax(youden_j)
+optimal_threshold = thresholds[optimal_idx]
+print(f"\nYouden's J optimal threshold: {optimal_threshold:.3f}")
+print(f"TPR: {tpr[optimal_idx]:.3f}, FPR: {fpr[optimal_idx]:.3f}")
+
+
+
+# made a correlation matrix
+correlation_matrix = X.corr()
+
+print("Correlation Matrix:")
+print(correlation_matrix)
+
+# Visualised it with a heatmap
+plt.figure(figsize=(8, 6))
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', center=0, 
+            square=True, fmt='.2f')
+plt.title('Feature Correlation Matrix')
+plt.show()
+
+
+
+import statsmodels.api as sm
+print("Statsmodels version:", sm.__version__)
+
+# Calculated VIF (Variance Inflation Factor) to ensure that multicollinearity was not an issue
+X_with_const = add_constant(X)  # Add constant for VIF calculation
+vif_data = pd.DataFrame()
+vif_data['Feature'] = X_with_const.columns
+vif_data['VIF'] = [variance_inflation_factor(X_with_const.values, i) 
+                   for i in range(X_with_const.shape[1])]
+
+print("\nVariance Inflation Factors (VIF):")
+print(vif_data)
+
+# Rule of thumb:
+# VIF < 5: Low correlation (OK)
+# VIF 5-10: Moderate correlation (caution)
+# VIF > 10: High correlation (problematic)
